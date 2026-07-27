@@ -57,6 +57,7 @@ Every status change must generate a `StatusLog` audit record.
 - Requester dashboard includes a live maintenance-workload status chart that can be expanded into a full-screen modal.
 - Dashboard “View all” replaces the dashboard content with a server-paginated, summary-only system request queue (10 requests per page). The public API returns just the requested page, total pagination metadata, and aggregate status counts for accurate dashboard metrics and charts.
 - My reports is server-paginated (10 requests per page) and always scoped to the signed-in reporter. Its status filter is part of the backend query, preserving correct results and totals across every page.
+- A public “How it works” menu explains the request lifecycle with an automatically advancing, pulsing five-stage animation, selectable steps, role labels, and clear rejected/revision paths in Thai and English.
 - New-request location uses a required place description plus an OpenStreetMap preview and optional browser-geolocation coordinates, stored on the maintenance report. Every request-detail page shows a map: an OpenStreetMap pinpoint for saved coordinates or a place-description map search for older requests without coordinates.
 - Shared workflow-rule module used by report review, assignment, staff updates, and verification APIs; Node-based tests cover valid and invalid status transitions.
 - Checks last passed: `npx prisma validate`, `npm run lint`, and `npm run build`.

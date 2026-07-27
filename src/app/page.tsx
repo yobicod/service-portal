@@ -248,7 +248,7 @@ function StatusBadge({ status }: { status: Status }) {
 export default function Home() {
   const { data: session } = useSession();
   const { language } = useLanguage();
-  const [view, setView] = useState<"dashboard" | "new" | "reports">(
+  const [view, setView] = useState<"dashboard" | "how" | "new" | "reports">(
     "dashboard",
   );
   const [showAllRequests, setShowAllRequests] = useState(false);
@@ -357,8 +357,8 @@ export default function Home() {
     window.location.assign("/login?callbackUrl=/");
   }
 
-  function selectView(nextView: "dashboard" | "new" | "reports") {
-    if (nextView !== "dashboard" && !session) {
+  function selectView(nextView: "dashboard" | "how" | "new" | "reports") {
+    if ((nextView === "new" || nextView === "reports") && !session) {
       requireLogin();
       return;
     }
@@ -451,7 +451,7 @@ export default function Home() {
   }
 
   const nav: {
-    id: "dashboard" | "new" | "reports";
+    id: "dashboard" | "how" | "new" | "reports";
     label: string;
     icon: string;
   }[] = [
@@ -459,6 +459,11 @@ export default function Home() {
       id: "dashboard",
       label: language === "th" ? "หน้าหลัก" : "Dashboard",
       icon: "grid",
+    },
+    {
+      id: "how",
+      label: language === "th" ? "วิธีใช้งาน" : "How it works",
+      icon: "clock",
     },
     ...(session
       ? [
@@ -633,7 +638,7 @@ export default function Home() {
               </button>
             </div>
           )}
-          {reportState === "loading" && (
+          {view !== "how" && reportState === "loading" && (
             <div
               aria-busy="true"
               className="rounded-xl border border-slate-200 bg-white p-8 text-sm font-medium text-slate-500"
@@ -643,7 +648,7 @@ export default function Home() {
                 : "Loading maintenance requests…"}
             </div>
           )}
-          {reportState === "error" && (
+          {view !== "how" && reportState === "error" && (
             <div
               role="alert"
               className="rounded-xl border border-red-100 bg-red-50 p-6 text-sm text-red-800"
@@ -707,11 +712,12 @@ export default function Home() {
               onNew={() => selectView("new")}
             />
           )}
+          {view === "how" && <HowItWorks />}
         </div>
       </main>
       <nav
         aria-label={language === "th" ? "เมนูหลัก" : "Primary navigation"}
-        className={`fixed inset-x-0 bottom-0 z-30 grid border-t border-slate-200 bg-white p-2 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] lg:hidden ${session ? "grid-cols-4" : "grid-cols-2"}`}
+        className={`fixed inset-x-0 bottom-0 z-30 grid border-t border-slate-200 bg-white p-2 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] lg:hidden ${session ? "grid-cols-5" : "grid-cols-3"}`}
       >
         {nav.map((item) => (
           <button
@@ -729,6 +735,160 @@ export default function Home() {
         )}
       </nav>
     </div>
+  );
+}
+
+function HowItWorks() {
+  const { language } = useLanguage();
+  const th = language === "th";
+  const steps = th
+    ? [
+        {
+          title: "ส่งคำขอ",
+          description: "ระบุปัญหา สถานที่ และรูปภาพประกอบ",
+          role: "ผู้แจ้ง",
+        },
+        {
+          title: "ตรวจสอบ",
+          description: "ผู้ดูแลตรวจสอบความถูกต้องและอนุมัติงาน",
+          role: "ผู้ดูแล",
+        },
+        {
+          title: "มอบหมายงาน",
+          description: "กำหนดเจ้าหน้าที่และวันครบกำหนด",
+          role: "ผู้ดูแล",
+        },
+        {
+          title: "ดำเนินการ",
+          description: "เจ้าหน้าที่ซ่อม บันทึกความคืบหน้า และแนบหลักฐาน",
+          role: "เจ้าหน้าที่",
+        },
+        {
+          title: "ปิดงาน",
+          description: "ผู้ดูแลตรวจรับและปิดรายการที่เสร็จสมบูรณ์",
+          role: "ผู้ดูแล",
+        },
+      ]
+    : [
+        {
+          title: "Submit request",
+          description: "Describe the issue, location, and supporting photos.",
+          role: "Requester",
+        },
+        {
+          title: "Review",
+          description: "An administrator checks and approves the request.",
+          role: "Admin",
+        },
+        {
+          title: "Assign work",
+          description: "A staff member and due date are assigned.",
+          role: "Admin",
+        },
+        {
+          title: "Repair",
+          description: "Staff update progress and attach repair evidence.",
+          role: "Staff",
+        },
+        {
+          title: "Close request",
+          description: "The administrator verifies the result and closes it.",
+          role: "Admin",
+        },
+      ];
+  const [activeStep, setActiveStep] = useState(0);
+
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => setActiveStep((current) => (current + 1) % steps.length),
+      1800,
+    );
+    return () => window.clearInterval(interval);
+  }, [steps.length]);
+
+  return (
+    <section className="mx-auto max-w-5xl">
+      <div className="rounded-2xl bg-slate-900 px-6 py-8 text-white sm:px-10 sm:py-10">
+        <p className="text-sm font-bold text-orange-300">
+          {th ? "วิธีการทำงาน" : "HOW IT WORKS"}
+        </p>
+        <h1 className="mt-2 text-3xl font-extrabold tracking-tight sm:text-4xl">
+          {th ? "ติดตามงานซ่อมได้ทุกขั้นตอน" : "See every step of your request"}
+        </h1>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
+          {th
+            ? "แอนิเมชันนี้แสดงเส้นทางหลักตั้งแต่แจ้งปัญหาจนถึงปิดงาน กดแต่ละขั้นเพื่ออ่านรายละเอียด"
+            : "This animation follows the standard path from an issue report to a completed request. Select any stage for its details."}
+        </p>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 sm:p-8">
+        <p className="sr-only" aria-live="polite">
+          {th
+            ? `กำลังแสดงขั้นตอน: ${steps[activeStep].title}`
+            : `Showing stage: ${steps[activeStep].title}`}
+        </p>
+        <ol className="grid gap-3 lg:grid-cols-5 lg:gap-4">
+          {steps.map((step, index) => {
+            const isActive = activeStep === index;
+            return (
+              <li key={step.title} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setActiveStep(index)}
+                  className={`w-full rounded-xl border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-orange-400 ${isActive ? "border-orange-300 bg-orange-50 shadow-sm" : "border-slate-200 bg-white hover:border-orange-200 hover:bg-orange-50/40"}`}
+                  aria-current={isActive ? "step" : undefined}
+                >
+                  <span
+                    className={`grid h-9 w-9 place-items-center rounded-full text-sm font-extrabold ${isActive ? "animate-pulse bg-[#ee641b] text-white motion-reduce:animate-none" : "bg-slate-100 text-slate-500"}`}
+                  >
+                    {index + 1}
+                  </span>
+                  <span className="mt-4 block text-sm font-extrabold text-slate-900">
+                    {step.title}
+                  </span>
+                  <span className="mt-1 block text-xs font-semibold text-[#d94e0b]">
+                    {step.role}
+                  </span>
+                  <span className="mt-2 block text-sm leading-5 text-slate-600">
+                    {step.description}
+                  </span>
+                </button>
+                {index < steps.length - 1 && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -bottom-3 left-1/2 h-3 border-l-2 border-dashed border-orange-200 lg:-right-2 lg:bottom-auto lg:left-auto lg:top-1/2 lg:h-0 lg:w-4 lg:border-l-0 lg:border-t-2"
+                  />
+                )}
+              </li>
+            );
+          })}
+        </ol>
+
+        <div className="mt-7 grid gap-4 border-t border-slate-100 pt-6 sm:grid-cols-2">
+          <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">
+            <p className="font-extrabold">
+              {th ? "หากงานต้องแก้ไขเพิ่มเติม" : "If more work is needed"}
+            </p>
+            <p className="mt-1 leading-5">
+              {th
+                ? "ผู้ดูแลจะส่งงานกลับไปที่เจ้าหน้าที่พร้อมคำแนะนำ แล้วดำเนินการตรวจรับอีกครั้ง"
+                : "The administrator returns the task to staff with guidance, then verifies it again after the update."}
+            </p>
+          </div>
+          <div className="rounded-xl bg-red-50 p-4 text-sm text-red-900">
+            <p className="font-extrabold">
+              {th ? "หากคำขอไม่ผ่านการอนุมัติ" : "If a request is not approved"}
+            </p>
+            <p className="mt-1 leading-5">
+              {th
+                ? "รายการจะถูกปิดเป็น “ไม่อนุมัติ” พร้อมเหตุผลที่ผู้ดูแลบันทึกไว้"
+                : "The request is marked as rejected with the reason recorded by the administrator."}
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
