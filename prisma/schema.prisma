@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  ADMIN
+  STAFF
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ReportStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  REJECTED
+  APPROVED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED_BY_STAFF
+  NEEDS_REVISION
+  CLOSED
+}
+
+enum TaskStatus {
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED_BY_STAFF
+  NEEDS_REVISION
+  CLOSED
+}
+
+enum AttachmentTarget {
+  REPORT
+  TASK
+  COMMENT
+}
+
+model User {
+  id            String              @id @default(cuid())
+  name          String
+  email         String              @unique
+  passwordHash  String?
+  phone         String?
+  role          Role                @default(USER)
+  reports       MaintenanceReport[] @relation("Reporter")
+  assignedTasks MaintenanceTask[]   @relation("AssignedStaff")
+  createdTasks  MaintenanceTask[]   @relation("AssignedBy")
+  attachments   Attachment[]
+  statusLogs    StatusLog[]
+  comments      Comment[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+}
+
+model MaintenanceReport {
+  id           String            @id @default(cuid())
+  referenceNo  String            @unique
+  reporterId   String
+  reporter     User              @relation("Reporter", fields: [reporterId], references: [id], onDelete: Restrict)
+  title        String
+  description  String            @db.Text
+  category     String
+  location     String
+  latitude     Decimal?          @db.Decimal(10, 7)
+  longitude    Decimal?          @db.Decimal(10, 7)
+  priority     Priority          @default(MEDIUM)
+  status       ReportStatus      @default(SUBMITTED)
+  rejectReason String?           @db.Text
+  internalNote String?           @db.Text
+  tasks        MaintenanceTask[]
+  attachments  Attachment[]
+  comments     Comment[]
+  statusLogs   StatusLog[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([reporterId, status])
+  @@index([status, priority])
+}
+
+model MaintenanceTask {
+  id                String            @id @default(cuid())
+  reportId          String
+  report            MaintenanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  assignedStaffId   String
+  assignedStaff     User              @relation("AssignedStaff", fields: [assignedStaffId], references: [id], onDelete: Restrict)
+  assignedByAdminId String
+  assignedByAdmin   User              @relation("AssignedBy", fields: [assignedByAdminId], references: [id], onDelete: Restrict)
+  instruction       String?           @db.Text
+  dueDate           DateTime?
+  estimatedCost     Decimal?          @db.Decimal(12, 2)
+  status            TaskStatus        @default(ASSIGNED)
+  progressNote      String?           @db.Text
+  completedNote     String?           @db.Text
+  adminCloseNote    String?           @db.Text
+  attachments       Attachment[]
+  comments          Comment[]
+  statusLogs        StatusLog[]
+  completedAt       DateTime?
+  closedAt          DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([assignedStaffId, status])
+  @@index([reportId])
+}
+
+model Attachment {
+  id           String             @id @default(cuid())
+  target       AttachmentTarget
+  reportId     String?
+  report       MaintenanceReport? @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  taskId       String?
+  task         MaintenanceTask?   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  commentId    String?
+  comment      Comment?           @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy   User               @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  fileUrl      String
+  fileName     String
+  mimeType     String
+  createdAt    DateTime           @default(now())
+
+  @@index([reportId])
+  @@index([taskId])
+}
+
+model StatusLog {
+  id          String             @id @default(cuid())
+  reportId    String?
+  report      MaintenanceReport? @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  taskId      String?
+  task        MaintenanceTask?   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  changedById String
+  changedBy   User               @relation(fields: [changedById], references: [id], onDelete: Restrict)
+  fromStatus  String?
+  toStatus    String
+  comment     String?            @db.Text
+  createdAt   DateTime           @default(now())
+
+  @@index([reportId, createdAt])
+  @@index([taskId, createdAt])
+}
+
+model Comment {
+  id          String            @id @default(cuid())
+  reportId    String
+  report      MaintenanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  taskId      String?
+  task        MaintenanceTask?  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User              @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  message     String            @db.Text
+  attachments Attachment[]
+  createdAt   DateTime          @default(now())
+
+  @@index([reportId, createdAt])
+}

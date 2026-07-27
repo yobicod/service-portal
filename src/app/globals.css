@@ -1,26 +1,13 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+:root { --background: #f6f7f8; --foreground: #1e2935; }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--foreground); font-family: var(--font-geist-sans), Arial, sans-serif; }
+html:lang(th) body { font-family: var(--font-ibm-plex-thai), Tahoma, sans-serif; }
+button, input, select, textarea { font: inherit; }
+.field-label { display: block; margin-bottom: .5rem; font-size: .875rem; font-weight: 700; color: #334155; }
+.field-label b { color: #e65d15; }
+.field-input { display: block; width: 100%; border: 1px solid #dbe1e7; border-radius: .5rem; background: #fff; padding: .7rem .85rem; font-size: .875rem; color: #1e293b; outline: none; transition: border-color .15s, box-shadow .15s; }
+.field-input::placeholder { color: #94a3b8; }
+.field-input:focus { border-color: #f27434; box-shadow: 0 0 0 3px rgba(242, 116, 52, .13); }

@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: maintenance-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: maintenance
+      POSTGRES_USER: maintenance
+      POSTGRES_PASSWORD: maintenance
+    ports:
+      - "5432:5432"
+    volumes:
+      - maintenance_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maintenance -d maintenance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: maintenance-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: maintenance
+      MINIO_ROOT_PASSWORD: maintenance-minio-password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - maintenance_minio_data:/data
+
+volumes:
+  maintenance_postgres_data:
+  maintenance_minio_data:
