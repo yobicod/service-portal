@@ -60,7 +60,7 @@ Every status change must generate a `StatusLog` audit record.
 - A public “How it works” menu explains the request lifecycle with an automatically advancing, pulsing five-stage animation, selectable steps, role labels, and clear rejected/revision paths in Thai and English.
 - New-request location uses a required place description plus an OpenStreetMap preview and optional browser-geolocation coordinates, stored on the maintenance report. Every request-detail page shows a map: an OpenStreetMap pinpoint for saved coordinates or a place-description map search for older requests without coordinates.
 - Shared workflow-rule module used by report review, assignment, staff updates, and verification APIs; Node-based tests cover valid and invalid status transitions.
-- Checks last passed: `npx prisma validate`, `npm run lint`, `npm test`, and `npm run build`. The test pre-step generates Prisma Client so clean CI checkouts can run tests without committed generated code.
+- Checks last passed: `npx prisma validate`, `npm run lint`, `npm test`, and `npm run build`. The test pre-step generates Prisma Client so clean CI checkouts can run tests without committed generated code; CI also supplies non-secret build-only service configuration because Next.js evaluates API modules during the production build.
 
 ## Local development
 
