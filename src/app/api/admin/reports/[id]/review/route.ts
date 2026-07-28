@@ -3,6 +3,7 @@ import { Priority, ReportStatus, Role } from "@/generated/prisma/client";
 import { getActor, isResponse, jsonError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { canReviewReport } from "@/lib/workflow";
+import { requireWorkflowClaim, WorkflowConflictError } from "@/lib/workflow-mutation";
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const actor = await getActor(request, [Role.ADMIN]);
@@ -17,10 +18,24 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   if (body.priority && !Object.values(Priority).includes(body.priority)) return jsonError("Invalid priority.");
   const nextStatus = body.action === "approve" ? ReportStatus.APPROVED : ReportStatus.REJECTED;
 
-  const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.maintenanceReport.update({ where: { id }, data: { status: nextStatus, priority: body.priority ?? report.priority, rejectReason: body.action === "reject" ? body.reason.trim() : null, internalNote: typeof body.internalNote === "string" ? body.internalNote.trim() : report.internalNote } });
-    await tx.statusLog.create({ data: { reportId: id, changedById: actor.id, fromStatus: report.status, toStatus: nextStatus, comment: body.action === "reject" ? body.reason.trim() : "Report approved." } });
-    return result;
-  });
-  return NextResponse.json({ data: updated });
+  try {
+    const updated = await prisma.$transaction(async (tx) => {
+      const claim = await tx.maintenanceReport.updateMany({
+        where: { id, status: report.status },
+        data: {
+          status: nextStatus,
+          priority: body.priority ?? report.priority,
+          rejectReason: body.action === "reject" ? body.reason.trim() : null,
+          internalNote: typeof body.internalNote === "string" ? body.internalNote.trim() : report.internalNote,
+        },
+      });
+      requireWorkflowClaim(claim);
+      await tx.statusLog.create({ data: { reportId: id, changedById: actor.id, fromStatus: report.status, toStatus: nextStatus, comment: body.action === "reject" ? body.reason.trim() : "Report approved." } });
+      return tx.maintenanceReport.findUniqueOrThrow({ where: { id } });
+    });
+    return NextResponse.json({ data: updated });
+  } catch (error) {
+    if (error instanceof WorkflowConflictError) return jsonError(error.message, 409);
+    throw error;
+  }
 }

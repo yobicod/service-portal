@@ -8,7 +8,7 @@ import { safeCallbackPath } from "@/lib/safe-callback";
 
 export default function LoginPage() {
   const { language } = useLanguage();
-  const [error, setError] = useState("");
+  const [hasError, setHasError] = useState(false);
   const [pending, setPending] = useState(false);
   const th = language === "th";
   const callbackPath = useMemo(() => {
@@ -22,7 +22,7 @@ export default function LoginPage() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
-    setError("");
+    setHasError(false);
     const data = new FormData(event.currentTarget);
     const result = await signIn("credentials", {
       email: data.get("email"),
@@ -30,10 +30,8 @@ export default function LoginPage() {
       redirect: false,
     });
     setPending(false);
-    if (!result?.ok) {
-      setError(
-        th ? "อีเมลหรือรหัสผ่านไม่ถูกต้อง" : "Invalid email or password.",
-      );
+    if (!result?.ok || result.error) {
+      setHasError(true);
       return;
     }
     window.location.assign(callbackPath);
@@ -60,9 +58,14 @@ export default function LoginPage() {
             ? "ใช้บัญชีบริการแจ้งซ่อมเพื่อดำเนินการต่อ"
             : "Use your maintenance-service account to continue."}
         </p>
-        {error && (
-          <p className="mt-5 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-            {error}
+        {hasError && (
+          <p
+            id="login-error"
+            role="alert"
+            aria-live="assertive"
+            className="mt-5 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700"
+          >
+            {th ? "อีเมลหรือรหัสผ่านไม่ถูกต้อง" : "Invalid email or password."}
           </p>
         )}
         <label className="mt-6 block">
@@ -72,6 +75,8 @@ export default function LoginPage() {
             autoComplete="email"
             name="email"
             type="email"
+            aria-describedby={hasError ? "login-error" : undefined}
+            aria-invalid={hasError || undefined}
             className="field-input"
             placeholder={th ? "ชื่อ@example.com" : "name@example.com"}
           />
@@ -83,6 +88,8 @@ export default function LoginPage() {
             autoComplete="current-password"
             name="password"
             type="password"
+            aria-describedby={hasError ? "login-error" : undefined}
+            aria-invalid={hasError || undefined}
             className="field-input"
             placeholder={th ? "รหัสผ่านของคุณ" : "Your password"}
           />
