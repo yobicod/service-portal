@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { LogoutButton } from "@/components/logout-button";
 import { useLanguage } from "@/components/language-provider";
 import { localizeCategory, localizeStatus } from "@/lib/localization";
@@ -19,6 +19,10 @@ type Report = {
   tasks: Task[];
 };
 type Staff = { id: string; name: string };
+type Notice = { tone: "success" | "error"; text: string };
+type Confirmation =
+  | { kind: "review"; report: Report; action: "approve" | "reject" }
+  | { kind: "verify"; task: Task; action: "close" | "revision" };
 
 const jsonHeaders = { "Content-Type": "application/json" };
 const statusTone: Record<string, string> = {
@@ -33,128 +37,256 @@ const statusTone: Record<string, string> = {
   CLOSED: "bg-slate-100 text-slate-600 ring-slate-200",
 };
 
+async function readPayload(response: Response) {
+  const text = await response.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as { data?: unknown; error?: unknown };
+  } catch {
+    return null;
+  }
+}
+
 export default function AdminPage() {
   const [reports, setReports] = useState<Report[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
   const [assignment, setAssignment] = useState<Report | null>(null);
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [busyIds, setBusyIds] = useState<string[]>([]);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [loadError, setLoadError] = useState("");
+  const busyRef = useRef(new Set<string>());
+  const assignmentHeadingRef = useRef<HTMLHeadingElement>(null);
+  const confirmationHeadingRef = useRef<HTMLHeadingElement>(null);
+  const panelTriggerRef = useRef<HTMLButtonElement | null>(null);
   const { language } = useLanguage();
   const th = language === "th";
 
-  async function load() {
-    const [reportResponse, staffResponse] = await Promise.all([
-      fetch("/api/admin/reports"),
-      fetch("/api/admin/staff"),
-    ]);
-    if (reportResponse.ok) setReports((await reportResponse.json()).data);
-    if (staffResponse.ok) setStaff((await staffResponse.json()).data);
-  }
-
-  useEffect(() => {
-    async function loadInitialData() {
+  const load = useCallback(async () => {
+    try {
       const [reportResponse, staffResponse] = await Promise.all([
         fetch("/api/admin/reports"),
         fetch("/api/admin/staff"),
       ]);
-      if (reportResponse.ok) setReports((await reportResponse.json()).data);
-      if (staffResponse.ok) setStaff((await staffResponse.json()).data);
+      const [reportPayload, staffPayload] = await Promise.all([
+        readPayload(reportResponse),
+        readPayload(staffResponse),
+      ]);
+      if (!reportResponse.ok || !reportPayload || !Array.isArray(reportPayload.data)) {
+        throw new Error(
+          typeof reportPayload?.error === "string"
+            ? reportPayload.error
+            : th
+              ? "ไม่สามารถโหลดรายการแจ้งซ่อมได้"
+              : "Unable to load reports.",
+        );
+      }
+      if (!staffResponse.ok || !staffPayload || !Array.isArray(staffPayload.data)) {
+        throw new Error(
+          typeof staffPayload?.error === "string"
+            ? staffPayload.error
+            : th
+              ? "ไม่สามารถโหลดรายชื่อเจ้าหน้าที่ได้"
+              : "Unable to load staff members.",
+        );
+      }
+      setReports(reportPayload.data as Report[]);
+      setStaff(staffPayload.data as Staff[]);
+      setLoadState("ready");
+    } catch (error) {
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : th
+            ? "ไม่สามารถโหลดพื้นที่ทำงานผู้ดูแลได้"
+            : "Unable to load the admin workspace.",
+      );
+      setLoadState("error");
     }
-    void loadInitialData();
-  }, []);
+  }, [th]);
 
-  async function review(report: Report, action: "approve" | "reject") {
-    const reason =
-      action === "reject"
-        ? window
-            .prompt(
-              th
-                ? "โปรดระบุเหตุผลที่ไม่อนุมัติรายการนี้"
-                : "Why is this request being rejected?",
-            )
-            ?.trim()
-        : undefined;
-    if (action === "reject" && !reason) return;
-    setBusy(report.id);
-    const response = await fetch(`/api/admin/reports/${report.id}/review`, {
-      method: "PATCH",
-      headers: jsonHeaders,
-      body: JSON.stringify({ action, reason }),
-    });
-    setMessage(
-      response.ok
-        ? th
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  function retryLoad() {
+    setLoadState("loading");
+    setLoadError("");
+    void load();
+  }
+
+  useEffect(() => {
+    const heading = assignment ? assignmentHeadingRef.current : confirmationHeadingRef.current;
+    if (!heading) return;
+    heading.focus();
+    heading.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [assignment, confirmation]);
+
+  function beginBusy(id: string) {
+    if (busyRef.current.has(id)) return false;
+    busyRef.current.add(id);
+    setBusyIds(Array.from(busyRef.current));
+    return true;
+  }
+
+  function endBusy(id: string) {
+    busyRef.current.delete(id);
+    setBusyIds(Array.from(busyRef.current));
+  }
+
+  function closePanel() {
+    setAssignment(null);
+    setConfirmation(null);
+    requestAnimationFrame(() => panelTriggerRef.current?.focus());
+  }
+
+  function openAssignment(report: Report, trigger: HTMLButtonElement) {
+    if (busyRef.current.has(report.id)) return;
+    panelTriggerRef.current = trigger;
+    setConfirmation(null);
+    setAssignment(report);
+    setNotice(null);
+  }
+
+  function openConfirmation(
+    value: Confirmation,
+    trigger: HTMLButtonElement,
+  ) {
+    const id = value.kind === "review" ? value.report.id : value.task.id;
+    if (busyRef.current.has(id)) return;
+    panelTriggerRef.current = trigger;
+    setAssignment(null);
+    setConfirmation(value);
+    setNotice(null);
+  }
+
+  async function review(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!confirmation || confirmation.kind !== "review") return;
+    const { report, action } = confirmation;
+    if (!beginBusy(report.id)) return;
+    const data = new FormData(event.currentTarget);
+    const reason = String(data.get("reason") ?? "").trim();
+    const internalNote = String(data.get("internalNote") ?? "").trim();
+    try {
+      const response = await fetch(`/api/admin/reports/${report.id}/review`, {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ action, reason, internalNote }),
+      });
+      const payload = await readPayload(response);
+      if (!response.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : th
+              ? "ไม่สามารถอัปเดตรายการได้"
+              : "Unable to update report.",
+        );
+      }
+      setNotice({
+        tone: "success",
+        text: th
           ? `${action === "approve" ? "อนุมัติ" : "ไม่อนุมัติ"} ${report.referenceNo} แล้ว`
-          : `${report.referenceNo} was ${action}d.`
-        : ((await response.json()).error ??
-            (th ? "ไม่สามารถอัปเดตรายการได้" : "Unable to update report.")),
-    );
-    setBusy(null);
-    await load();
+          : `${report.referenceNo} was ${action === "approve" ? "approved" : "rejected"}.`,
+      });
+      setConfirmation(null);
+      await load();
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : th ? "ไม่สามารถอัปเดตรายการได้" : "Unable to update report.",
+      });
+    } finally {
+      endBusy(report.id);
+    }
   }
 
   async function assign(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!assignment) return;
-    setBusy(assignment.id);
+    if (!assignment || !beginBusy(assignment.id)) return;
+    const report = assignment;
     const data = new FormData(event.currentTarget);
-    const response = await fetch("/api/admin/tasks", {
-      method: "POST",
-      headers: jsonHeaders,
-      body: JSON.stringify({
-        reportId: assignment.id,
-        assignedStaffId: data.get("assignedStaffId"),
-        instruction: data.get("instruction"),
-        dueDate: data.get("dueDate")
-          ? new Date(String(data.get("dueDate"))).toISOString()
-          : undefined,
-        priority: data.get("priority"),
-        estimatedCost: data.get("estimatedCost"),
-      }),
-    });
-    setMessage(
-      response.ok
-        ? th
-          ? `มอบหมาย ${assignment.referenceNo} แล้ว`
-          : `${assignment.referenceNo} assigned successfully.`
-        : ((await response.json()).error ??
-            (th ? "ไม่สามารถมอบหมายงานได้" : "Unable to assign task.")),
-    );
-    setBusy(null);
-    if (response.ok) setAssignment(null);
-    await load();
+    try {
+      const response = await fetch("/api/admin/tasks", {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          reportId: report.id,
+          assignedStaffId: data.get("assignedStaffId"),
+          instruction: data.get("instruction"),
+          dueDate: data.get("dueDate")
+            ? new Date(String(data.get("dueDate"))).toISOString()
+            : undefined,
+          priority: data.get("priority"),
+          estimatedCost: data.get("estimatedCost"),
+        }),
+      });
+      const payload = await readPayload(response);
+      if (!response.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : th ? "ไม่สามารถมอบหมายงานได้" : "Unable to assign task.",
+        );
+      }
+      setNotice({
+        tone: "success",
+        text: th ? `มอบหมาย ${report.referenceNo} แล้ว` : `${report.referenceNo} assigned successfully.`,
+      });
+      setAssignment(null);
+      await load();
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : th ? "ไม่สามารถมอบหมายงานได้" : "Unable to assign task.",
+      });
+    } finally {
+      endBusy(report.id);
+    }
   }
 
-  async function verify(task: Task, close: boolean) {
-    setBusy(task.id);
-    const response = await fetch(`/api/admin/tasks/${task.id}/verify`, {
-      method: "PATCH",
-      headers: jsonHeaders,
-      body: JSON.stringify({
-        action: close ? "close" : "revision",
-        note: close
-          ? th
-            ? "ตรวจสอบและอนุมัติงานแล้ว"
-            : "Work verified and approved."
-          : th
-            ? "โปรดตรวจสอบและดำเนินการส่วนที่เหลือให้เสร็จ"
-            : "Please review and complete the remaining work.",
-      }),
-    });
-    setMessage(
-      response.ok
-        ? close
-          ? th
-            ? "ปิดงานแล้ว"
-            : "Task closed."
-          : th
-            ? "ส่งงานกลับไปแก้ไขแล้ว"
-            : "Task returned for revision."
-        : ((await response.json()).error ??
-            (th ? "ไม่สามารถตรวจสอบงานได้" : "Unable to verify task.")),
-    );
-    setBusy(null);
-    await load();
+  async function verify(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!confirmation || confirmation.kind !== "verify") return;
+    const { task, action } = confirmation;
+    if (!beginBusy(task.id)) return;
+    const note = String(new FormData(event.currentTarget).get("note") ?? "").trim();
+    try {
+      const response = await fetch(`/api/admin/tasks/${task.id}/verify`, {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          action,
+          note,
+        }),
+      });
+      const payload = await readPayload(response);
+      if (!response.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : th ? "ไม่สามารถตรวจสอบงานได้" : "Unable to verify task.",
+        );
+      }
+      setNotice({
+        tone: "success",
+        text: action === "close"
+          ? th ? "ตรวจรับและปิดงานแล้ว" : "Task verified and closed."
+          : th ? "ส่งงานกลับไปแก้ไขแล้ว" : "Task returned for revision.",
+      });
+      setConfirmation(null);
+      await load();
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : th ? "ไม่สามารถตรวจสอบงานได้" : "Unable to verify task.",
+      });
+    } finally {
+      endBusy(task.id);
+    }
   }
 
   return (
@@ -184,11 +316,34 @@ export default function AdminPage() {
             <LogoutButton className="rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50" />
           </div>
         </header>
-        {message && (
-          <div className="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-            {message}
+        {notice && (
+          <div
+            role={notice.tone === "error" ? "alert" : "status"}
+            aria-live={notice.tone === "error" ? "assertive" : "polite"}
+            className={`mt-6 rounded-lg px-4 py-3 text-sm font-semibold ${
+              notice.tone === "error"
+                ? "bg-red-50 text-red-800"
+                : "bg-emerald-50 text-emerald-800"
+            }`}
+          >
+            {notice.text}
           </div>
         )}
+        {loadState === "loading" && (
+          <div role="status" aria-live="polite" className="mt-7 rounded-xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-600">
+            {th ? "กำลังโหลดพื้นที่ทำงาน…" : "Loading admin workspace…"}
+          </div>
+        )}
+        {loadState === "error" && (
+          <div role="alert" className="mt-7 rounded-xl border border-red-200 bg-red-50 p-6 text-center">
+            <p className="text-sm font-semibold text-red-800">{loadError}</p>
+            <button onClick={retryLoad} className="mt-4 rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-bold text-white">
+              {th ? "ลองอีกครั้ง" : "Retry"}
+            </button>
+          </div>
+        )}
+        {loadState === "ready" && (
+          <>
         <section className="mt-7 grid gap-4 sm:grid-cols-3">
           {[
             [
@@ -218,19 +373,19 @@ export default function AdminPage() {
           ))}
         </section>
         {assignment && (
-          <section className="mt-7 rounded-xl border border-orange-200 bg-white p-6">
+          <section role="dialog" aria-labelledby="assignment-title" className="mt-7 rounded-xl border border-orange-200 bg-white p-6 shadow-sm">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-bold text-[#e65d15]">
                   {th ? "มอบหมายงาน" : "ASSIGN TASK"}
                 </p>
-                <h2 className="mt-1 text-lg font-bold">{assignment.title}</h2>
+                <h2 ref={assignmentHeadingRef} id="assignment-title" tabIndex={-1} className="mt-1 text-lg font-bold outline-none">{assignment.title}</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {assignment.referenceNo} · {assignment.location}
                 </p>
               </div>
               <button
-                onClick={() => setAssignment(null)}
+                onClick={closePanel}
                 className="text-sm font-bold text-slate-500"
               >
                 {th ? "ยกเลิก" : "Cancel"}
@@ -311,13 +466,90 @@ export default function AdminPage() {
               </label>
               <div className="md:col-span-2 flex justify-end">
                 <button
-                  disabled={busy === assignment.id}
+                  disabled={busyIds.includes(assignment.id)}
                   className="rounded-lg bg-[#ee641b] px-5 py-3 text-sm font-bold text-white disabled:opacity-50"
                 >
-                  {th ? "สร้างและมอบหมายงาน" : "Create and assign task"}
+                  {busyIds.includes(assignment.id)
+                    ? th ? "กำลังมอบหมาย…" : "Assigning…"
+                    : th ? "สร้างและมอบหมายงาน" : "Create and assign task"}
                 </button>
               </div>
             </form>
+          </section>
+        )}
+        {confirmation && (
+          <section
+            role="dialog"
+            aria-labelledby="confirmation-title"
+            className="mt-7 rounded-xl border border-orange-200 bg-white p-6 shadow-sm"
+          >
+            <h2
+              ref={confirmationHeadingRef}
+              id="confirmation-title"
+              tabIndex={-1}
+              className="text-lg font-bold text-slate-900 outline-none"
+            >
+              {confirmation.kind === "review"
+                ? confirmation.action === "approve"
+                  ? th ? "ยืนยันการอนุมัติ" : "Confirm approval"
+                  : th ? "ยืนยันการไม่อนุมัติ" : "Confirm rejection"
+                : confirmation.action === "close"
+                  ? th ? "ยืนยันการตรวจรับและปิดงาน" : "Confirm verification and closure"
+                  : th ? "ส่งงานกลับไปแก้ไข" : "Return task for revision"}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {confirmation.kind === "review"
+                ? `${confirmation.report.referenceNo} · ${confirmation.report.title}`
+                : th ? "ตรวจสอบการดำเนินงานและบันทึกข้อความก่อนยืนยัน" : "Review the work and add a note before confirming."}
+            </p>
+            {confirmation.kind === "review" ? (
+              <form onSubmit={review} className="mt-5">
+                {confirmation.action === "reject" ? (
+                  <label>
+                    <span className="field-label">{th ? "เหตุผลที่ไม่อนุมัติ" : "Rejection reason"} <b>*</b></span>
+                    <textarea name="reason" required autoFocus className="field-input mt-1 min-h-24 resize-y" />
+                  </label>
+                ) : (
+                  <label>
+                    <span className="field-label">{th ? "บันทึกภายใน (ไม่บังคับ)" : "Internal note (optional)"}</span>
+                    <textarea name="internalNote" autoFocus className="field-input mt-1 min-h-24 resize-y" />
+                  </label>
+                )}
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={closePanel} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700">{th ? "ยกเลิก" : "Cancel"}</button>
+                  <button disabled={busyIds.includes(confirmation.report.id)} className="rounded-lg bg-[#ee641b] px-4 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                    {busyIds.includes(confirmation.report.id) ? (th ? "กำลังบันทึก…" : "Saving…") : (th ? "ยืนยัน" : "Confirm")}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={verify} className="mt-5">
+                <label>
+                  <span className="field-label">
+                    {confirmation.action === "close"
+                      ? th ? "บันทึกการตรวจรับ" : "Verification note"
+                      : th ? "สิ่งที่ต้องแก้ไข" : "Required revisions"} <b>*</b>
+                  </span>
+                  <textarea
+                    name="note"
+                    required
+                    autoFocus
+                    className="field-input mt-1 min-h-24 resize-y"
+                    defaultValue={
+                      confirmation.action === "close"
+                        ? th ? "ตรวจสอบและอนุมัติงานแล้ว" : "Work verified and approved."
+                        : th ? "โปรดตรวจสอบและดำเนินการส่วนที่เหลือให้เสร็จ" : "Please review and complete the remaining work."
+                    }
+                  />
+                </label>
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={closePanel} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700">{th ? "ยกเลิก" : "Cancel"}</button>
+                  <button disabled={busyIds.includes(confirmation.task.id)} className="rounded-lg bg-[#ee641b] px-4 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                    {busyIds.includes(confirmation.task.id) ? (th ? "กำลังบันทึก…" : "Saving…") : (th ? "ยืนยัน" : "Confirm")}
+                  </button>
+                </div>
+              </form>
+            )}
           </section>
         )}
         <section className="mt-7 overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -350,7 +582,7 @@ export default function AdminPage() {
                 </span>
                 <div className="flex flex-wrap gap-2">
                   <Link
-                    href={`/reports/${report.id}`}
+                    href={`/reports/${report.id}?from=admin`}
                     className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700"
                   >
                     {th ? "ดูรายละเอียด" : "View details"}
@@ -358,15 +590,15 @@ export default function AdminPage() {
                   {report.status === "SUBMITTED" && (
                     <>
                       <button
-                        disabled={busy === report.id}
-                        onClick={() => review(report, "approve")}
+                        disabled={busyIds.includes(report.id)}
+                        onClick={(event) => openConfirmation({ kind: "review", report, action: "approve" }, event.currentTarget)}
                         className="rounded-lg bg-[#ee641b] px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
                       >
                         {th ? "อนุมัติ" : "Approve"}
                       </button>
                       <button
-                        disabled={busy === report.id}
-                        onClick={() => review(report, "reject")}
+                        disabled={busyIds.includes(report.id)}
+                        onClick={(event) => openConfirmation({ kind: "review", report, action: "reject" }, event.currentTarget)}
                         className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-50"
                       >
                         {th ? "ไม่อนุมัติ" : "Reject"}
@@ -375,8 +607,8 @@ export default function AdminPage() {
                   )}
                   {report.status === "APPROVED" && (
                     <button
-                      disabled={busy === report.id}
-                      onClick={() => setAssignment(report)}
+                      disabled={busyIds.includes(report.id)}
+                      onClick={(event) => openAssignment(report, event.currentTarget)}
                       className="rounded-lg bg-[#26333e] px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
                     >
                       {th ? "มอบหมายงาน" : "Assign task"}
@@ -387,15 +619,15 @@ export default function AdminPage() {
                     .map((task) => (
                       <div className="flex gap-2" key={task.id}>
                         <button
-                          disabled={busy === task.id}
-                          onClick={() => verify(task, true)}
+                          disabled={busyIds.includes(task.id)}
+                          onClick={(event) => openConfirmation({ kind: "verify", task, action: "close" }, event.currentTarget)}
                           className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
                         >
                           {th ? "ตรวจรับและปิดงาน" : "Verify & close"}
                         </button>
                         <button
-                          disabled={busy === task.id}
-                          onClick={() => verify(task, false)}
+                          disabled={busyIds.includes(task.id)}
+                          onClick={(event) => openConfirmation({ kind: "verify", task, action: "revision" }, event.currentTarget)}
                           className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-bold text-amber-700 disabled:opacity-50"
                         >
                           {th ? "ส่งกลับแก้ไข" : "Revision"}
@@ -407,6 +639,8 @@ export default function AdminPage() {
             ))}
           </div>
         </section>
+          </>
+        )}
       </div>
     </main>
   );

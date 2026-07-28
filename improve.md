@@ -187,18 +187,18 @@ Working well: public report data is sanitized; requester access is denied on adm
 ### P1 — Fix next
 
 - [x] **IMP-02: Preserve safe login callback destinations.** Added `safeCallbackPath` with same-origin validation and regression tests; login redirects to the validated local destination after credentials succeed. Files: `src/app/login/page.tsx`, `src/lib/safe-callback.ts`, `src/lib/safe-callback.test.ts`. Tests: local/external/malformed-path tests pass. Manual role deep-link verification remains recommended.
-- [~] **IMP-03: Add resilient data/error state infrastructure.** Added safe JSON parsing, submit pending state, loading/error/retry presentation, and separate success/error notice tones in `src/app/page.tsx`. Lint/build pass and successful submission is verified. Remaining verification: simulated 401/500/non-JSON/slow responses and a dedicated UI regression test.
+- [x] **IMP-03: Add resilient data/error state infrastructure.** Requester, admin, staff, and report-detail actions now use controlled loading/error/retry or pending states, safe non-JSON handling, semantic success/error live messages, and synchronous busy guards. Chromium QA verified JSON and non-JSON 500 recovery, retry, duplicate-comment prevention, and staff/admin action feedback.
 - [x] **IMP-04: Restore requester mobile navigation.** Added fixed accessible Dashboard/My reports/New request navigation below `lg`; independently observed all actions in the 320px browser accessibility tree. Files: `src/app/page.tsx`. Manual 768/1024/1440 and keyboard traversal remains recommended. Drill-down work remains IMP-08.
 - [x] **IMP-06: Persist language preference and expose it on mobile.** Persisted validated local preference and exposed the selector at small widths. Files: `src/components/language-provider.tsx`, `src/app/page.tsx`. Tests: storage safeguards plus manual 320px English selection/reload verification.
 - [x] **IMP-07: Make workload chart dialog accessible.** Added initial focus, Tab trap, Escape close, focus restoration and labelled close action. Files: `src/components/request-status-chart.tsx`. Manual browser check confirmed initial close control focus and Escape close; lint/build pass.
-- [~] **IMP-13: Keep sign out reachable on mobile.** Added the shared sign-out control to the 320px bottom navigation. Files: `src/app/page.tsx`. The control is visible in the accessibility tree; independent sign-out completion could not be conclusively automated because browser-control clicks were intercepted by the dev-tools overlay. Recheck manually before release.
+- [x] **IMP-13: Keep sign out reachable on mobile.** The shared sign-out control is available in the 320px navigation; independent keyboard/pointer QA confirmed sign-out reaches `/login`. Admin/staff role links also remain discoverable at tablet/mobile widths.
 
 ### P2 — Improve soon
 
-- [ ] **IMP-05: Make or remove false dashboard controls.** Implement accessible request search with no-results/clear and make guide/notification controls truthful. Files: `src/app/page.tsx`, tests. Dependencies: report state from IMP-03. Verify keyboard behavior and public/private copy.
-- [ ] **IMP-08: Make recent-request rows actionable.** Link requester-owned dashboard rows to their protected detail page and use a clear sign-in action for public summaries rather than a decorative chevron. Files: `src/app/page.tsx`, UI tests. Dependencies: IMP-02 callback behavior. Verify mouse/keyboard opening and no public private-data access.
-- [ ] **IMP-09: Add attachment selection feedback.** Render files, removal, client validation, progress/error states. Files: `src/app/page.tsx`, upload tests. Dependencies: IMP-03 messaging. Verify valid/invalid/failed selection.
-- [ ] **IMP-10: Build regression coverage.** Add integration/E2E/a11y coverage for implemented P0/P1 work and document remaining manual test matrix. Files: tests/tooling. Dependencies: implementation tasks. Verify CI commands.
+- [x] **IMP-05: Make or remove false dashboard controls.** Search is labelled and filters recent requests with clear/no-results behavior; notifications expose a truthful empty state; the service-guide action opens How it works. Desktop/mobile Chromium QA passed.
+- [x] **IMP-08: Make recent-request rows actionable.** Owned summaries are keyboard/mouse links to protected detail; visitors receive a clear sign-in action. Stable `?view=` navigation returns requesters to My reports and admins to their queue.
+- [x] **IMP-09: Add attachment selection feedback.** New-request, comment, and staff evidence selectors show filename/count, validate type and 10MB size, support removal and same-file reselection, announce changes, and expose explicit upload/pending feedback. Desktop/mobile QA passed.
+- [~] **IMP-10: Build regression coverage.** Node coverage now includes 12 tests for submission parsing/persistence, callbacks, attachment selection, workflow claims, and transitions. Extensive manual Playwright evidence covers role workflows, error recovery, callbacks, maps, uploads, dialogs, rapid clicks, and responsive layouts under `output/playwright/`. Remaining: commit a CI-runnable browser suite, add other browser engines, and perform screen-reader testing.
 
 ### P3 — Polish later
 
@@ -207,34 +207,32 @@ Working well: public report data is sanitized; requester access is denied on adm
 
 ## 9. Suggested implementation order
 
-1. Reproduce/capture IMP-01 and establish controlled API/client response contracts.
-2. Complete IMP-02 and IMP-03 so auth and failures recover correctly.
-3. Implement IMP-04 and IMP-06 to restore mobile/core navigation and persistent language.
-4. Implement IMP-07 accessibility before adding richer chart interactions.
-5. Implement IMP-05 and IMP-09 after shared state/messaging patterns exist.
-6. Add/expand IMP-10 regression coverage and run full manual matrix.
-7. Complete P3 copy polish.
+1. Convert the verified manual role flows into a CI-runnable browser suite (IMP-10).
+2. Add cross-browser and screen-reader coverage.
+3. Add authenticated endpoint/database integration tests for atomic workflow conflicts.
+4. Complete the remaining P3 copy/localization polish.
 
 ## 10. Final audit verdict
 
-**Broken:** several promised controls remain inert; error-recovery and mobile sign-out completion still need final verification.
+**Broken:** no confirmed broken interactive control remains in the exercised local Chromium matrix.
 
-**Confusing:** public possessive wording, decorative chevrons, invisible attachment selection, inactive bell/search/guide controls.
+**Confusing:** the major false affordances, decorative chevrons, invisible selections, requester/admin back-navigation mismatch, and native-prompt workflow have been removed. P3 ownership/role copy polish remains.
 
-**Missing:** API/browser regression coverage, simulated failure coverage, search/notification/guide behavior, request drill-down, attachment selection feedback, and final manual responsive checks.
+**Missing:** CI browser automation, Firefox/WebKit coverage, and screen-reader output testing. These are coverage gaps rather than currently reproduced interaction failures.
 
-**Works well:** local app/services start, role API boundaries reject requester admin/staff access, public data is sanitized, seeded queues load, workflow unit tests pass.
+**Works well:** credential failure/callback handling; public/requester/admin/staff navigation; request creation/comments/uploads/maps; dashboard search/guide/notification states; responsive request/staff/admin layouts; load/error/retry states; accessible confirmations/focus restoration; atomic rapid-click workflow transitions.
 
-**Five highest-priority improvements:** IMP-03 failure-path verification; IMP-13 mobile sign-out verification; IMP-05 truthful dashboard controls; IMP-09 attachment feedback; IMP-10 regression coverage.
+**Highest-priority follow-up:** finish IMP-10 by promoting the verified Playwright matrix into CI, then cover other browsers and screen readers.
 
-**Production readiness:** No. The P0 flow is repaired and verified, but P1 verification and P2 reliability/quality work remain.
+**Production readiness:** Interaction QA passes locally in Chromium. Release readiness remains conditional on production configuration, security/auth roadmap items, and the cross-browser/automated coverage above.
 
 ## Implementation and regression record
 
-- Issues discovered: 13 (one P0, six P1, four P2, two P3).
-- Fixed and verified: 5 (IMP-01, IMP-02, IMP-04, IMP-06, IMP-07).
-- Implemented awaiting independent verification: 2 (IMP-03, IMP-13).
-- Remaining: 8.
-- Blocked: none; browser/mobile/manual coverage remains a known test limitation.
-- Tests executed during audit/remediation: `npm test` (9 passing), local HTTP/API checks, QA Chromium desktop checks, manual browser requester submission, 320px navigation/language/dialog checks, `npm run lint`, `npm run build`, `npx prisma validate`, and whitespace checks.
-- Final release recommendation: **do not release** pending IMP-03/IMP-13 verification and P2 regression coverage.
+- Issues tracked: 13 (one P0, six P1, four P2, two P3).
+- Fixed and independently verified: 10 (IMP-01, IMP-02, IMP-03, IMP-04, IMP-05, IMP-06, IMP-07, IMP-08, IMP-09, IMP-13).
+- Partially complete: 1 (IMP-10; strong unit/manual coverage, CI browser suite pending).
+- Remaining: 2 P3 copy/localization polish items (IMP-11, IMP-12).
+- Additional verified fixes folded into the related issues: invalid-credential HTTP-200 handling; null-coordinate/`0,0` map fallback; admin/staff explicit error states and confirmation panels; report/comment/staff attachment removal; assignment focus/scroll; synchronous UI busy guards; atomic database workflow claims.
+- Rapid-click evidence: the QA task `MR-20260727-C775FF` produced exactly one assignment, start, completion, and close log; repeated confirm attempts generated one mutation request per transition. A coordinate QA report verified the OpenStreetMap marker path; a denied-geolocation check showed controlled feedback.
+- Tests executed: `npm test` (12 passing), `npm run lint`, `npx tsc --noEmit`, `npx prisma validate`, `npm run build`, API/database count checks, and multi-agent Playwright passes across 1440×900, 1024×768, 768×1024, and 320×800 where applicable.
+- Evidence: `output/playwright/qa-requester/`, `qa-admin/`, `qa-staff-responsive/`, and the corresponding `*-retest`/`*-final` folders.

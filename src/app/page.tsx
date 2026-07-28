@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { LogoutButton } from "@/components/logout-button";
@@ -8,6 +8,7 @@ import { RequestStatusChart } from "@/components/request-status-chart";
 import { LanguageSwitcher, useLanguage } from "@/components/language-provider";
 import { localizeCategory, localizePriority } from "@/lib/localization";
 import { appConfig } from "@/lib/app-config";
+import { attachmentSelectionError } from "@/lib/attachment-selection";
 
 type Status =
   | "Submitted"
@@ -246,7 +247,7 @@ function StatusBadge({ status }: { status: Status }) {
 }
 
 export default function Home() {
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const { language } = useLanguage();
   const [view, setView] = useState<"dashboard" | "how" | "new" | "reports">(
     "dashboard",
@@ -264,7 +265,8 @@ export default function Home() {
     "loading" | "ready" | "error"
   >("loading");
   const [notice, setNotice] = useState<{
-    message: string;
+    th: string;
+    en: string;
     tone: "success" | "error";
   } | null>(null);
   const [reportState, setReportState] = useState<"loading" | "ready" | "error">(
@@ -272,6 +274,8 @@ export default function Home() {
   );
   const [reloadKey, setReloadKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const metrics = useMemo(() => {
     if (publicStatusCounts && !session) {
       return {
@@ -296,6 +300,37 @@ export default function Home() {
       closed: reports.filter((r) => r.status === "Closed").length,
     };
   }, [publicStatusCounts, reports, session]);
+
+  useEffect(() => {
+    if (sessionStatus === "loading") return;
+    const applyViewFromUrl = () => {
+      const requestedView = new URLSearchParams(window.location.search).get(
+        "view",
+      );
+      if (
+        requestedView === "reports" ||
+        requestedView === "new" ||
+        requestedView === "how"
+      ) {
+        if (
+          (requestedView === "reports" || requestedView === "new") &&
+          !session
+        ) {
+          window.location.assign(
+            `/login?callbackUrl=${encodeURIComponent(`/?view=${requestedView}`)}`,
+          );
+          return;
+        }
+        setView(requestedView);
+      } else {
+        setView("dashboard");
+      }
+      setShowAllRequests(false);
+    };
+    applyViewFromUrl();
+    window.addEventListener("popstate", applyViewFromUrl);
+    return () => window.removeEventListener("popstate", applyViewFromUrl);
+  }, [session, sessionStatus]);
 
   useEffect(() => {
     async function loadReports() {
@@ -344,7 +379,6 @@ export default function Home() {
         }
         setPublicQueue(body.data.map(toReport));
         setPublicPagination(body.pagination);
-        setPublicStatusCounts(toStatusCounts(body.statusCounts));
         setPublicQueueState("ready");
       } catch {
         setPublicQueueState("error");
@@ -353,17 +387,22 @@ export default function Home() {
     void loadPublicQueue();
   }, [showAllRequests, publicPage, reloadKey]);
 
-  function requireLogin() {
-    window.location.assign("/login?callbackUrl=/");
+  function requireLogin(callbackPath = "/") {
+    window.location.assign(
+      `/login?callbackUrl=${encodeURIComponent(callbackPath)}`,
+    );
   }
 
   function selectView(nextView: "dashboard" | "how" | "new" | "reports") {
     if ((nextView === "new" || nextView === "reports") && !session) {
-      requireLogin();
+      requireLogin(`/?view=${nextView}`);
       return;
     }
     setShowAllRequests(false);
     setView(nextView);
+    const nextUrl =
+      nextView === "dashboard" ? "/" : `/?view=${encodeURIComponent(nextView)}`;
+    window.history.pushState(null, "", nextUrl);
   }
 
   async function submitReport(event: FormEvent<HTMLFormElement>) {
@@ -395,10 +434,8 @@ export default function Home() {
     } catch {
       setNotice({
         tone: "error",
-        message:
-          language === "th"
-            ? "ไม่สามารถส่งคำขอได้ โปรดลองอีกครั้ง"
-            : "Unable to submit your request. Please try again.",
+        th: "ไม่สามารถส่งคำขอได้ โปรดลองอีกครั้ง",
+        en: "Unable to submit your request. Please try again.",
       });
       setIsSubmitting(false);
       return;
@@ -406,11 +443,8 @@ export default function Home() {
     if (!response.ok || !body?.data) {
       setNotice({
         tone: "error",
-        message:
-          body?.error ??
-          (language === "th"
-            ? "ไม่สามารถส่งคำขอได้ โปรดลองอีกครั้ง"
-            : "Unable to submit your request. Please try again."),
+        th: body?.error ?? "ไม่สามารถส่งคำขอได้ โปรดลองอีกครั้ง",
+        en: body?.error ?? "Unable to submit your request. Please try again.",
       });
       setIsSubmitting(false);
       return;
@@ -437,17 +471,16 @@ export default function Home() {
     setMyReportsPage(1);
     setReloadKey((current) => current + 1);
     setNotice({
-      message: attachmentUploadFailed
-        ? language === "th"
-          ? `ส่ง ${createdReport.referenceNo} แล้ว แต่ไม่สามารถอัปโหลดไฟล์แนบบางรายการได้`
-          : `${createdReport.referenceNo} was submitted, but one or more attachments could not be uploaded.`
-        : language === "th"
-          ? `ส่ง ${report.id} เพื่อรอตรวจสอบแล้ว`
-          : `${report.id} has been submitted for review.`,
+      th: attachmentUploadFailed
+        ? `ส่ง ${createdReport.referenceNo} แล้ว แต่ไม่สามารถอัปโหลดไฟล์แนบบางรายการได้`
+        : `ส่ง ${report.id} เพื่อรอตรวจสอบแล้ว`,
+      en: attachmentUploadFailed
+        ? `${createdReport.referenceNo} was submitted, but one or more attachments could not be uploaded.`
+        : `${report.id} has been submitted for review.`,
       tone: attachmentUploadFailed ? "error" : "success",
     });
     setIsSubmitting(false);
-    setView("reports");
+    selectView("reports");
   }
 
   const nav: {
@@ -577,28 +610,78 @@ export default function Home() {
               {language === "th" ? appConfig.nameTh : appConfig.name}
             </span>
           </div>
-          <div className="hidden max-w-sm flex-1 lg:block">
-            <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2.5 text-slate-400">
-              <Icon name="search" className="h-4 w-4" />
-              <input
-                className="w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
-                placeholder={
-                  language === "th"
-                    ? "ค้นหารายการแจ้งซ่อม…"
-                    : "Search reports..."
-                }
-              />
-            </label>
+          <div
+            className={
+              view === "dashboard" ? "hidden max-w-sm flex-1 lg:block" : "hidden"
+            }
+          >
+            <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2.5 text-slate-400">
+              <label
+                htmlFor="dashboard-search"
+                className="flex min-w-0 flex-1 items-center gap-2"
+              >
+                <span className="sr-only">
+                  {language === "th"
+                    ? "ค้นหารายการแจ้งซ่อมล่าสุด"
+                    : "Search recent requests"}
+                </span>
+                <Icon name="search" className="h-4 w-4 shrink-0" />
+                <input
+                  id="dashboard-search"
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  className="w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
+                  placeholder={
+                    language === "th"
+                      ? "ค้นหารายการแจ้งซ่อม…"
+                      : "Search reports..."
+                  }
+                />
+              </label>
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="text-xs font-bold text-slate-600"
+                >
+                  {language === "th" ? "ล้าง" : "Clear"}
+                </button>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <LanguageSwitcher className="inline-flex" />
-            <button
-              aria-label={language === "th" ? "การแจ้งเตือน" : "Notifications"}
-              className="relative rounded-full p-2 text-slate-500 hover:bg-slate-100"
-            >
-              <Icon name="bell" className="h-5 w-5" />
-              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-[#f36c21]" />
-            </button>
+            <div className="relative">
+              <button
+                type="button"
+                aria-label={
+                  language === "th" ? "การแจ้งเตือน" : "Notifications"
+                }
+                aria-expanded={notificationsOpen}
+                aria-controls="notification-panel"
+                onClick={() => setNotificationsOpen((open) => !open)}
+                className="relative rounded-full p-2 text-slate-500 hover:bg-slate-100"
+              >
+                <Icon name="bell" className="h-5 w-5" />
+              </button>
+              {notificationsOpen && (
+                <div
+                  id="notification-panel"
+                  role="status"
+                  className="absolute right-0 top-12 z-40 w-64 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-lg"
+                >
+                  <p className="text-sm font-bold text-slate-900">
+                    {language === "th" ? "การแจ้งเตือน" : "Notifications"}
+                  </p>
+                  <p className="mt-2 text-sm leading-5 text-slate-500">
+                    {language === "th"
+                      ? "ยังไม่มีการแจ้งเตือนใหม่"
+                      : "You have no new notifications."}
+                  </p>
+                </div>
+              )}
+            </div>
             <div className="hidden text-right sm:block">
               <p className="text-sm font-bold">
                 {session?.user.name ??
@@ -625,7 +708,7 @@ export default function Home() {
               role="status"
               className={`mb-6 flex items-center justify-between rounded-xl border px-4 py-3 text-sm font-medium ${notice.tone === "success" ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-red-100 bg-red-50 text-red-800"}`}
             >
-              <span>{notice.message}</span>
+              <span>{language === "th" ? notice.th : notice.en}</span>
               <button
                 onClick={() => setNotice(null)}
                 className={
@@ -682,8 +765,12 @@ export default function Home() {
                 <Dashboard
                   reports={reports}
                   metrics={metrics}
+                  searchQuery={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  signedIn={Boolean(session)}
                   onNew={() => selectView("new")}
                   onViewAll={() => setShowAllRequests(true)}
+                  onHow={() => selectView("how")}
                 />
                 <RequestStatusChart
                   reports={reports}
@@ -695,7 +782,7 @@ export default function Home() {
           {reportState === "ready" && view === "new" && (
             <NewRequest
               onSubmit={submitReport}
-              onCancel={() => setView("dashboard")}
+              onCancel={() => selectView("dashboard")}
               isSubmitting={isSubmitting}
             />
           )}
@@ -717,7 +804,13 @@ export default function Home() {
       </main>
       <nav
         aria-label={language === "th" ? "เมนูหลัก" : "Primary navigation"}
-        className={`fixed inset-x-0 bottom-0 z-30 grid border-t border-slate-200 bg-white p-2 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] lg:hidden ${session ? "grid-cols-5" : "grid-cols-3"}`}
+        className={`fixed inset-x-0 bottom-0 z-30 grid border-t border-slate-200 bg-white p-2 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] lg:hidden ${
+          session?.user.role === "ADMIN" || session?.user.role === "STAFF"
+            ? "grid-cols-6"
+            : session
+              ? "grid-cols-5"
+              : "grid-cols-3"
+        }`}
       >
         {nav.map((item) => (
           <button
@@ -732,6 +825,24 @@ export default function Home() {
         ))}
         {session && (
           <LogoutButton className="flex min-h-11 flex-col items-center justify-center rounded-lg px-1 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50" />
+        )}
+        {session?.user.role === "ADMIN" && (
+          <Link
+            href="/admin"
+            className="flex min-h-11 flex-col items-center justify-center rounded-lg px-1 text-center text-xs font-bold text-slate-600 hover:bg-slate-50"
+          >
+            <Icon name="users" className="h-5 w-5" />
+            {language === "th" ? "ผู้ดูแล" : "Admin"}
+          </Link>
+        )}
+        {session?.user.role === "STAFF" && (
+          <Link
+            href="/staff"
+            className="flex min-h-11 flex-col items-center justify-center rounded-lg px-1 text-center text-xs font-bold text-slate-600 hover:bg-slate-50"
+          >
+            <Icon name="setting" className="h-5 w-5" />
+            {language === "th" ? "เจ้าหน้าที่" : "Staff"}
+          </Link>
         )}
       </nav>
     </div>
@@ -895,16 +1006,38 @@ function HowItWorks() {
 function Dashboard({
   reports,
   metrics,
+  searchQuery,
+  onSearchChange,
+  signedIn,
   onNew,
   onViewAll,
+  onHow,
 }: {
   reports: Report[];
   metrics: { open: number; review: number; progress: number; closed: number };
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
+  signedIn: boolean;
   onNew: () => void;
   onViewAll: () => void;
+  onHow: () => void;
 }) {
   const { language } = useLanguage();
   const th = language === "th";
+  const normalizedQuery = searchQuery.trim().toLocaleLowerCase(language);
+  const visibleReports = reports.filter((report) => {
+    if (!normalizedQuery) return true;
+    return [
+      report.id,
+      report.title,
+      report.category,
+      report.location,
+      report.priority,
+      report.status,
+    ].some((value) =>
+      value.toLocaleLowerCase(language).includes(normalizedQuery),
+    );
+  });
   return (
     <>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -928,6 +1061,32 @@ function Dashboard({
           <Icon name="plus" className="h-4 w-4" />
           {th ? "แจ้งซ่อม" : "Submit a request"}
         </button>
+      </div>
+      <div className="mt-6 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-slate-400 lg:hidden">
+        <label className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="sr-only">
+            {th ? "ค้นหารายการแจ้งซ่อมล่าสุด" : "Search recent requests"}
+          </span>
+          <Icon name="search" className="h-4 w-4 shrink-0" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.target.value)}
+            className="w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
+            placeholder={
+              th ? "ค้นหารายการแจ้งซ่อม…" : "Search recent requests..."
+            }
+          />
+        </label>
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => onSearchChange("")}
+            className="text-xs font-bold text-slate-600"
+          >
+            {th ? "ล้าง" : "Clear"}
+          </button>
+        )}
       </div>
       <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {[
@@ -998,11 +1157,9 @@ function Dashboard({
             </button>
           </div>
           <div className="divide-y divide-slate-100">
-            {reports.slice(0, 4).map((report) => (
-              <div
-                key={report.id}
-                className="flex items-center gap-4 px-6 py-4"
-              >
+            {visibleReports.slice(0, 4).map((report) => {
+              const content = (
+                <>
                 <div className="hidden rounded-lg bg-slate-100 p-2.5 text-slate-500 sm:block">
                   <Icon name="setting" className="h-5 w-5" />
                 </div>
@@ -1020,9 +1177,52 @@ function Dashboard({
                     {report.updated}
                   </p>
                 </div>
-                <Icon name="chevron" className="h-4 w-4 text-slate-400" />
+                {signedIn ? (
+                  <Icon name="chevron" className="h-4 w-4 text-slate-400" />
+                ) : (
+                  <span className="shrink-0 text-xs font-bold text-[#df5711]">
+                    {th ? "เข้าสู่ระบบ" : "Sign in"}
+                  </span>
+                )}
+                </>
+              );
+              return signedIn && report.dbId ? (
+                <Link
+                  key={report.id}
+                  href={`/reports/${report.dbId}?from=reports`}
+                  className="flex items-center gap-4 px-6 py-4 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-orange-400"
+                >
+                  {content}
+                </Link>
+              ) : (
+                <Link
+                  key={report.id}
+                  href="/login?callbackUrl=%2F%3Fview%3Dreports"
+                  className="flex items-center gap-4 px-6 py-4 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-orange-400"
+                  aria-label={
+                    th
+                      ? `เข้าสู่ระบบเพื่อดูรายการของคุณ ${report.title}`
+                      : `Sign in to view your requests; public summary: ${report.title}`
+                  }
+                >
+                  {content}
+                </Link>
+              );
+            })}
+            {visibleReports.length === 0 && (
+              <div
+                role="status"
+                className="px-6 py-10 text-center text-sm text-slate-500"
+              >
+                {normalizedQuery
+                  ? th
+                    ? `ไม่พบรายการที่ตรงกับ “${searchQuery.trim()}”`
+                    : `No recent requests match “${searchQuery.trim()}”.`
+                  : th
+                    ? "ยังไม่มีรายการแจ้งซ่อม"
+                    : "No recent requests yet."}
               </div>
-            ))}
+            )}
           </div>
         </div>
         <div className="rounded-xl bg-[#26333e] p-6 text-white">
@@ -1043,7 +1243,11 @@ function Dashboard({
             </p>
             <p className="mt-1 font-bold">02-329-8000 ext. 2196</p>
           </div>
-          <button className="mt-5 text-sm font-bold text-[#ff9b61]">
+          <button
+            type="button"
+            onClick={onHow}
+            className="mt-5 text-sm font-bold text-[#ff9b61]"
+          >
             {th ? "ดูคู่มือการใช้บริการ →" : "View service guide →"}
           </button>
         </div>
@@ -1264,32 +1468,11 @@ function NewRequest({
               }
             />
           </label>
-          <div className="md:col-span-2">
-            <span className="field-label">
-              {th ? "รูปภาพ" : "Photos"}{" "}
-              <span className="font-normal text-slate-400">
-                {th ? "(ไม่บังคับ)" : "(optional)"}
-              </span>
-            </span>
-            <label className="mt-1 flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition hover:border-[#ee641b] hover:bg-orange-50">
-              <Icon name="upload" className="h-6 w-6 text-[#e65d15]" />
-              <span className="mt-2 text-sm font-semibold text-slate-700">
-                {th ? "อัปโหลดรูปภาพ" : "Upload photos"}
-              </span>
-              <span className="mt-1 text-xs text-slate-400">
-                {th
-                  ? "PNG, JPG, WEBP หรือ PDF ขนาดไม่เกิน 10MB ต่อไฟล์"
-                  : "PNG, JPG, WEBP, or PDF up to 10MB each"}
-              </span>
-              <input
-                name="attachments"
-                type="file"
-                className="sr-only"
-                accept="image/jpeg,image/png,image/webp,application/pdf"
-                multiple
-              />
-            </label>
-          </div>
+          <AttachmentPicker
+            th={th}
+            className="md:col-span-2"
+            label={th ? "รูปภาพ" : "Photos"}
+          />
         </div>
         <div className="mt-8 flex flex-col-reverse gap-3 border-t border-slate-100 pt-6 sm:flex-row sm:justify-end">
           <button
@@ -1317,38 +1500,146 @@ function NewRequest({
   );
 }
 
+function AttachmentPicker({
+  th,
+  className = "",
+  label,
+}: {
+  th: boolean;
+  className?: string;
+  label: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [validationError, setValidationError] = useState<
+    "type" | "size" | null
+  >(null);
+
+  function writeFiles(nextFiles: File[]) {
+    setFiles(nextFiles);
+    if (inputRef.current) {
+      const transfer = new DataTransfer();
+      nextFiles.forEach((file) => transfer.items.add(file));
+      inputRef.current.files = transfer.files;
+    }
+  }
+
+  function selectFiles(event: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(event.target.files ?? []);
+    const valid = selected.filter((file) => !attachmentSelectionError(file));
+    const invalidType = selected.some(
+      (file) => attachmentSelectionError(file) === "type",
+    );
+    const invalidSize = selected.some(
+      (file) => attachmentSelectionError(file) === "size",
+    );
+    setValidationError(invalidType ? "type" : invalidSize ? "size" : null);
+    writeFiles(valid);
+  }
+
+  return (
+    <div className={className}>
+      <span className="field-label">
+        {label}{" "}
+        <span className="font-normal text-slate-400">
+          {th ? "(ไม่บังคับ)" : "(optional)"}
+        </span>
+      </span>
+      <label className="mt-1 flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition hover:border-[#ee641b] hover:bg-orange-50">
+        <Icon name="upload" className="h-6 w-6 text-[#e65d15]" />
+        <span className="mt-2 text-sm font-semibold text-slate-700">
+          {th ? "เลือกไฟล์แนบ" : "Choose attachments"}
+        </span>
+        <span className="mt-1 text-xs text-slate-400">
+          {th
+            ? "PNG, JPG, WEBP หรือ PDF ขนาดไม่เกิน 10MB ต่อไฟล์"
+            : "PNG, JPG, WEBP, or PDF up to 10MB each"}
+        </span>
+        <input
+          ref={inputRef}
+          name="attachments"
+          type="file"
+          className="sr-only"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          multiple
+          onChange={selectFiles}
+        />
+      </label>
+      <div aria-live="polite">
+        {validationError && (
+          <p className="mt-2 text-sm font-semibold text-red-700">
+            {validationError === "type"
+              ? th
+                ? "เลือกได้เฉพาะไฟล์ JPG, PNG, WEBP หรือ PDF"
+                : "Only JPG, PNG, WEBP, and PDF files are allowed."
+              : th
+                ? "แต่ละไฟล์ต้องมีขนาดไม่เกิน 10MB"
+                : "Each file must be 10MB or smaller."}
+          </p>
+        )}
+        {files.length > 0 && (
+          <div className="mt-3">
+            <p className="text-sm font-semibold text-slate-700">
+              {th
+                ? `เลือกแล้ว ${files.length} ไฟล์`
+                : `${files.length} file${files.length === 1 ? "" : "s"} selected`}
+            </p>
+            <ul className="mt-2 space-y-2">
+              {files.map((file, index) => (
+                <li
+                  key={`${file.name}-${file.size}-${index}`}
+                  className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                >
+                  <span className="min-w-0 truncate text-sm text-slate-600">
+                    {file.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      writeFiles(files.filter((_, item) => item !== index))
+                    }
+                    className="shrink-0 text-xs font-bold text-red-700"
+                    aria-label={
+                      th ? `นำ ${file.name} ออก` : `Remove ${file.name}`
+                    }
+                  >
+                    {th ? "นำออก" : "Remove"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LocationPicker({ th }: { th: boolean }) {
   const [coordinates, setCoordinates] = useState<{
     latitude: number;
     longitude: number;
   } | null>(null);
-  const [locationError, setLocationError] = useState("");
+  const [locationError, setLocationError] = useState<
+    "unsupported" | "denied" | null
+  >(null);
   const mapUrl = coordinates
     ? `https://www.openstreetmap.org/export/embed.html?bbox=${coordinates.longitude - 0.004}%2C${coordinates.latitude - 0.0025}%2C${coordinates.longitude + 0.004}%2C${coordinates.latitude + 0.0025}&layer=mapnik&marker=${coordinates.latitude}%2C${coordinates.longitude}`
     : "https://www.openstreetmap.org/export/embed.html?bbox=100.485%2C13.720%2C100.545%2C13.770&layer=mapnik";
 
   function useCurrentLocation() {
     if (!navigator.geolocation) {
-      setLocationError(
-        th
-          ? "เบราว์เซอร์นี้ไม่รองรับตำแหน่งปัจจุบัน"
-          : "This browser does not support location services.",
-      );
+      setLocationError("unsupported");
       return;
     }
-    setLocationError("");
+    setLocationError(null);
     navigator.geolocation.getCurrentPosition(
       (position) =>
         setCoordinates({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
         }),
-      () =>
-        setLocationError(
-          th
-            ? "ไม่สามารถอ่านตำแหน่งปัจจุบันได้ โปรดอนุญาตการเข้าถึงตำแหน่ง"
-            : "Unable to get your location. Please allow location access.",
-        ),
+      () => setLocationError("denied"),
       { enableHighAccuracy: true, timeout: 10000 },
     );
   }
@@ -1408,7 +1699,13 @@ function LocationPicker({ th }: { th: boolean }) {
       </p>
       {locationError && (
         <p className="mt-2 text-xs font-semibold text-red-700">
-          {locationError}
+          {locationError === "unsupported"
+            ? th
+              ? "เบราว์เซอร์นี้ไม่รองรับตำแหน่งปัจจุบัน"
+              : "This browser does not support location services."
+            : th
+              ? "ไม่สามารถอ่านตำแหน่งปัจจุบันได้ โปรดอนุญาตการเข้าถึงตำแหน่ง"
+              : "Unable to get your location. Please allow location access."}
         </p>
       )}
     </div>
@@ -1477,7 +1774,65 @@ function Reports({
             ))}
           </select>
         </div>
-        <div className="overflow-x-auto">
+        <div className="divide-y divide-slate-100 sm:hidden">
+          {reports.map((report) => (
+            <article key={report.id} className="p-4">
+              {report.dbId ? (
+                <Link
+                  href={`/reports/${report.dbId}?from=reports`}
+                  className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="break-words text-sm font-bold text-slate-800">
+                        {report.title}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {report.id} ·{" "}
+                        {localizeCategory(report.category, language)}
+                      </p>
+                    </div>
+                    <StatusBadge status={report.status} />
+                  </div>
+                  <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                    <div className="col-span-2">
+                      <dt className="font-bold text-slate-400">
+                        {th ? "สถานที่" : "Location"}
+                      </dt>
+                      <dd className="mt-0.5 break-words text-slate-600">
+                        {report.location}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-bold text-slate-400">
+                        {th ? "ความสำคัญ" : "Priority"}
+                      </dt>
+                      <dd className="mt-0.5 text-slate-600">
+                        {localizePriority(report.priority, language)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-bold text-slate-400">
+                        {th ? "อัปเดต" : "Updated"}
+                      </dt>
+                      <dd className="mt-0.5 text-slate-600">
+                        {report.updated}
+                      </dd>
+                    </div>
+                  </dl>
+                </Link>
+              ) : null}
+            </article>
+          ))}
+          {reports.length === 0 && (
+            <p className="p-8 text-center text-sm text-slate-500">
+              {th
+                ? "ไม่พบรายการในสถานะนี้"
+                : "No reports match this status."}
+            </p>
+          )}
+        </div>
+        <div className="hidden overflow-x-auto sm:block">
           <table className="w-full min-w-[760px] text-left">
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
               <tr>
@@ -1503,7 +1858,10 @@ function Reports({
                 <tr key={report.id} className="transition hover:bg-slate-50">
                   <td className="px-6 py-4">
                     {report.dbId ? (
-                      <Link href={`/reports/${report.dbId}`} className="block">
+                      <Link
+                        href={`/reports/${report.dbId}?from=reports`}
+                        className="block"
+                      >
                         <p className="text-sm font-bold text-slate-800">
                           {report.title}
                         </p>

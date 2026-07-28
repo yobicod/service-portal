@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useLanguage } from "@/components/language-provider";
+import { attachmentSelectionError } from "@/lib/attachment-selection";
 import {
   localizeCategory,
   localizePriority,
@@ -52,6 +53,14 @@ type Report = {
 };
 
 const jsonHeaders = { "Content-Type": "application/json" };
+type JsonBody = { data?: unknown; error?: unknown };
+async function readJson(response: Response): Promise<JsonBody | null> {
+  try {
+    return (await response.json()) as JsonBody;
+  } catch {
+    return null;
+  }
+}
 const dateTime = (value: string, language: "th" | "en") =>
   new Intl.DateTimeFormat(language === "th" ? "th-TH" : "en", {
     dateStyle: "medium",
@@ -103,30 +112,52 @@ function RequestLocationMap({
   location: string;
   th: boolean;
 }) {
-  const lat = Number(latitude);
-  const lng = Number(longitude);
-  const hasCoordinates = Number.isFinite(lat) && Number.isFinite(lng);
-  const source = hasCoordinates
-    ? `https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.004}%2C${lat - 0.0025}%2C${lng + 0.004}%2C${lat + 0.0025}&layer=mapnik&marker=${lat}%2C${lng}`
-    : `https://www.google.com/maps?q=${encodeURIComponent(location)}&output=embed`;
+  const hasSavedCoordinates =
+    latitude !== null &&
+    latitude !== "" &&
+    longitude !== null &&
+    longitude !== "";
+  const lat = hasSavedCoordinates ? Number(latitude) : Number.NaN;
+  const lng = hasSavedCoordinates ? Number(longitude) : Number.NaN;
+  const hasCoordinates =
+    hasSavedCoordinates && Number.isFinite(lat) && Number.isFinite(lng);
+  const mapSearchUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`;
 
   return (
     <div className="mt-6 border-t border-slate-100 pt-5">
       <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
         {th ? "แผนที่ตำแหน่ง" : "Location map"}
       </p>
-      <iframe
-        title={th ? "แผนที่ตำแหน่งรายการแจ้งซ่อม" : "Request location map"}
-        src={source}
-        loading="lazy"
-        className="mt-3 h-56 w-full rounded-lg border border-slate-200"
-      />
-      {!hasCoordinates && (
-        <p className="mt-2 text-xs text-slate-500">
+      {hasCoordinates ? (
+        <iframe
+          title={th ? "แผนที่ตำแหน่งรายการแจ้งซ่อม" : "Request location map"}
+          src={`https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.004}%2C${lat - 0.0025}%2C${lng + 0.004}%2C${lat + 0.0025}&layer=mapnik&marker=${lat}%2C${lng}`}
+          loading="lazy"
+          className="mt-3 h-56 w-full rounded-lg border border-slate-200"
+        />
+      ) : (
+        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <p className="text-sm font-bold text-slate-800">
+            {th ? "ไม่มีพิกัดที่บันทึกไว้" : "Saved coordinates unavailable"}
+          </p>
+          <p className="mt-2 text-sm text-slate-600">{location}</p>
+          <a
+            href={mapSearchUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-3 inline-flex text-sm font-bold text-[#d94e0b] underline underline-offset-2"
+          >
+            {th ? "ค้นหาสถานที่นี้บนแผนที่" : "Search this place on a map"}
+            <span className="sr-only">
+              {th ? " (เปิดในแท็บใหม่)" : " (opens in a new tab)"}
+            </span>
+          </a>
+          <p className="mt-2 text-xs text-slate-500">
           {th
-            ? "แสดงแผนที่จากคำอธิบายสถานที่ เนื่องจากไม่มีพิกัดที่บันทึกไว้"
-            : "Showing a map search from the place description because saved coordinates are unavailable."}
-        </p>
+              ? "ตรวจสอบผลการค้นหาก่อนเดินทาง เนื่องจากคำอธิบายสถานที่อาจไม่ระบุตำแหน่งที่แน่นอน"
+              : "Verify the search result before travelling because the place description may not identify an exact location."}
+          </p>
+        </div>
       )}
     </div>
   );
@@ -139,68 +170,159 @@ export default function ReportDetailPage({
 }) {
   const [report, setReport] = useState<Report | null>(null);
   const [reportId, setReportId] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState<{
+    tone: "success" | "error";
+    th: string;
+    en: string;
+  } | null>(null);
   const [error, setError] = useState("");
+  const [commentPending, setCommentPending] = useState(false);
+  const commentPendingRef = useRef(false);
+  const [commentFiles, setCommentFiles] = useState<File[]>([]);
+  const [commentFileError, setCommentFileError] = useState("");
+  const commentFileInputRef = useRef<HTMLInputElement>(null);
+  const [backDestination, setBackDestination] = useState<{
+    href: string;
+    admin: boolean;
+  }>({ href: "/?view=reports", admin: false });
   const { language } = useLanguage();
   const th = language === "th";
 
   async function load(id: string) {
-    const response = await fetch(`/api/reports/${id}`);
-    if (!response.ok) {
-      setError((await response.json()).error ?? "Unable to load this report.");
+    let response: Response;
+    try {
+      response = await fetch(`/api/reports/${id}`);
+    } catch {
+      setError("Unable to load this report.");
       return;
     }
-    setReport((await response.json()).data);
+    const body = await readJson(response);
+    if (!response.ok || !body?.data) {
+      setError(
+        typeof body?.error === "string"
+          ? body.error
+          : "Unable to load this report.",
+      );
+      return;
+    }
+    setReport(body.data as Report);
   }
 
   useEffect(() => {
     void (async () => {
       const { id } = await params;
       setReportId(id);
+      const from = new URLSearchParams(window.location.search).get("from");
+      setBackDestination(
+        from === "admin"
+          ? { href: "/admin", admin: true }
+          : { href: "/?view=reports", admin: false },
+      );
       await load(id);
     })();
   }, [params]);
 
   async function addComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!reportId) return;
+    if (!reportId || commentPendingRef.current) return;
+    commentPendingRef.current = true;
+    setCommentPending(true);
     const form = event.currentTarget;
     const data = new FormData(form);
-    const response = await fetch(`/api/reports/${reportId}/comments`, {
-      method: "POST",
-      headers: jsonHeaders,
-      body: JSON.stringify({ message: data.get("message") }),
-    });
-    const body = await response.json();
-    if (!response.ok) {
-      setMessage(body.error ?? "Unable to add comment.");
+    let response: Response;
+    try {
+      response = await fetch(`/api/reports/${reportId}/comments`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ message: data.get("message") }),
+      });
+    } catch {
+      setNotice({
+        tone: "error",
+        th: "ไม่สามารถเพิ่มความคิดเห็นได้ โปรดลองอีกครั้ง",
+        en: "Unable to add comment. Please try again.",
+      });
+      commentPendingRef.current = false;
+      setCommentPending(false);
       return;
     }
-    const files = data
-      .getAll("attachments")
-      .filter(
-        (value): value is File => value instanceof File && value.size > 0,
-      );
+    const body = await readJson(response);
+    if (!response.ok || !body?.data) {
+      const fallback = "Unable to add comment. Please try again.";
+      const bodyError = typeof body?.error === "string" ? body.error : fallback;
+      setNotice({ tone: "error", th: bodyError, en: bodyError });
+      commentPendingRef.current = false;
+      setCommentPending(false);
+      return;
+    }
+    const files = commentFiles;
     if (files.length) {
       const uploadData = new FormData();
       files.forEach((file) => uploadData.append("files", file));
-      const uploadResponse = await fetch(
-        `/api/comments/${body.data.id}/attachments`,
-        { method: "POST", body: uploadData },
-      );
-      if (!uploadResponse.ok) {
-        setMessage(
-          th
-            ? "เพิ่มความคิดเห็นแล้ว แต่ไม่สามารถอัปโหลดไฟล์แนบได้"
-            : "Comment added, but its attachment could not be uploaded.",
+      let uploadSucceeded = false;
+      try {
+        const uploadResponse = await fetch(
+          `/api/comments/${(body.data as { id: string }).id}/attachments`,
+          { method: "POST", body: uploadData },
         );
+        uploadSucceeded = uploadResponse.ok;
+      } catch {
+        uploadSucceeded = false;
+      }
+      if (!uploadSucceeded) {
+        setNotice({
+          tone: "error",
+          th: "เพิ่มความคิดเห็นแล้ว แต่ไม่สามารถอัปโหลดไฟล์แนบได้",
+          en: "Comment added, but its attachment could not be uploaded.",
+        });
+        commentPendingRef.current = false;
+        setCommentPending(false);
         await load(reportId);
         return;
       }
     }
     form.reset();
-    setMessage(th ? "เพิ่มความคิดเห็นแล้ว" : "Comment added.");
+    setCommentFiles([]);
+    setNotice({
+      tone: "success",
+      th: "เพิ่มความคิดเห็นแล้ว",
+      en: "Comment added.",
+    });
     await load(reportId);
+    commentPendingRef.current = false;
+    setCommentPending(false);
+  }
+
+  function writeCommentFiles(nextFiles: File[]) {
+    setCommentFiles(nextFiles);
+    if (commentFileInputRef.current) {
+      const transfer = new DataTransfer();
+      nextFiles.forEach((file) => transfer.items.add(file));
+      commentFileInputRef.current.files = transfer.files;
+    }
+  }
+
+  function selectCommentFiles(event: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(event.target.files ?? []);
+    const valid = selected.filter((file) => !attachmentSelectionError(file));
+    const invalidType = selected.some(
+      (file) => attachmentSelectionError(file) === "type",
+    );
+    const invalidSize = selected.some(
+      (file) => attachmentSelectionError(file) === "size",
+    );
+    setCommentFileError(
+      invalidType
+        ? th
+          ? "เลือกได้เฉพาะไฟล์ JPG, PNG, WEBP หรือ PDF"
+          : "Only JPG, PNG, WEBP, and PDF files are allowed."
+        : invalidSize
+          ? th
+            ? "แต่ละไฟล์ต้องมีขนาดไม่เกิน 10MB"
+            : "Each file must be 10MB or smaller."
+          : "",
+    );
+    writeCommentFiles(valid);
   }
 
   if (error)
@@ -209,10 +331,16 @@ export default function ReportDetailPage({
         <div className="rounded-xl bg-white p-8 text-center shadow-sm">
           <p className="font-bold text-red-700">{error}</p>
           <Link
-            href="/"
+            href={backDestination.href}
             className="mt-4 inline-block text-sm font-bold text-[#e65d15]"
           >
-            {th ? "กลับไปรายการของฉัน" : "Return to my reports"}
+            {backDestination.admin
+              ? th
+                ? "กลับไปพื้นที่ผู้ดูแล"
+                : "Return to admin workspace"
+              : th
+                ? "กลับไปรายการของฉัน"
+                : "Return to my reports"}
           </Link>
         </div>
       </main>
@@ -227,8 +355,18 @@ export default function ReportDetailPage({
   return (
     <main className="min-h-screen bg-[#f6f7f8] p-5 text-slate-800 sm:p-10">
       <div className="mx-auto max-w-5xl">
-        <Link href="/" className="text-sm font-bold text-[#e65d15]">
-          ← {th ? "รายการของฉัน" : "My reports"}
+        <Link
+          href={backDestination.href}
+          className="text-sm font-bold text-[#e65d15]"
+        >
+          ←{" "}
+          {backDestination.admin
+            ? th
+              ? "พื้นที่ผู้ดูแล"
+              : "Admin workspace"
+            : th
+              ? "รายการของฉัน"
+              : "My reports"}
         </Link>
         <header className="mt-5 flex flex-col gap-4 border-b border-slate-200 pb-7 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -248,9 +386,16 @@ export default function ReportDetailPage({
             {localizeStatus(report.status, language)}
           </span>
         </header>
-        {message && (
-          <p className="mt-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-            {message}
+        {notice && (
+          <p
+            role={notice.tone === "error" ? "alert" : "status"}
+            className={`mt-5 rounded-lg px-4 py-3 text-sm font-semibold ${
+              notice.tone === "error"
+                ? "bg-red-50 text-red-800"
+                : "bg-emerald-50 text-emerald-800"
+            }`}
+          >
+            {th ? notice.th : notice.en}
           </p>
         )}
         <section className="mt-7 grid gap-6 lg:grid-cols-[1.45fr_1fr]">
@@ -325,15 +470,71 @@ export default function ReportDetailPage({
                 />
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <input
+                    ref={commentFileInputRef}
                     name="attachments"
                     type="file"
                     multiple
                     accept="image/jpeg,image/png,image/webp,application/pdf"
                     className="text-xs text-slate-500"
+                    onChange={selectCommentFiles}
                   />
-                  <button className="rounded-lg bg-[#ee641b] px-4 py-2 text-sm font-bold text-white">
-                    {th ? "ส่ง" : "Send"}
+                  <button
+                    disabled={commentPending}
+                    className="rounded-lg bg-[#ee641b] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {commentPending
+                      ? th
+                        ? "กำลังส่ง…"
+                        : "Sending…"
+                      : th
+                        ? "ส่ง"
+                        : "Send"}
                   </button>
+                </div>
+                <div aria-live="polite">
+                  {commentFileError && (
+                    <p className="text-xs font-semibold text-red-700">
+                      {commentFileError}
+                    </p>
+                  )}
+                  {commentFiles.length > 0 && (
+                    <>
+                    <p className="mb-2 text-xs font-semibold text-slate-600">
+                      {th
+                        ? `เลือกแล้ว ${commentFiles.length} ไฟล์`
+                        : `${commentFiles.length} file${commentFiles.length === 1 ? "" : "s"} selected`}
+                    </p>
+                    <ul className="space-y-2">
+                      {commentFiles.map((file, index) => (
+                        <li
+                          key={`${file.name}-${file.size}-${index}`}
+                          className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2"
+                        >
+                          <span className="min-w-0 truncate text-xs text-slate-600">
+                            {file.name}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={commentPending}
+                            onClick={() =>
+                              writeCommentFiles(
+                                commentFiles.filter(
+                                  (_, item) => item !== index,
+                                ),
+                              )
+                            }
+                            className="shrink-0 text-xs font-bold text-red-700 disabled:opacity-50"
+                            aria-label={
+                              th ? `นำ ${file.name} ออก` : `Remove ${file.name}`
+                            }
+                          >
+                            {th ? "นำออก" : "Remove"}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    </>
+                  )}
                 </div>
               </form>
               <div className="mt-6 space-y-5">

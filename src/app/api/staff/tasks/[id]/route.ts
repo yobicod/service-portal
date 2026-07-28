@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Role } from "@/generated/prisma/client";
+import { ReportStatus, Role, TaskStatus } from "@/generated/prisma/client";
 import { getActor, isResponse, jsonError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { nextReportStatusForStaffAction, nextTaskStatusForStaffAction, StaffAction } from "@/lib/workflow";
+import { requireWorkflowClaim, WorkflowConflictError } from "@/lib/workflow-mutation";
+
+function currentReportStatusForTask(status: TaskStatus) {
+  if (status === TaskStatus.ASSIGNED) return ReportStatus.ASSIGNED;
+  if (status === TaskStatus.NEEDS_REVISION) return ReportStatus.NEEDS_REVISION;
+  return ReportStatus.IN_PROGRESS;
+}
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const actor = await getActor(request, [Role.STAFF]);
@@ -19,11 +26,29 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
   if (!nextTaskStatus) return jsonError("This action is not valid for the current task status.", 409);
   const nextReportStatus = nextReportStatusForStaffAction(action);
 
-  const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.maintenanceTask.update({ where: { id }, data: { status: nextTaskStatus, progressNote: typeof body.note === "string" ? body.note.trim() : task.progressNote, completedNote: body.action === "complete" ? body.note.trim() : task.completedNote, completedAt: body.action === "complete" ? new Date() : task.completedAt } });
-    await tx.maintenanceReport.update({ where: { id: task.reportId }, data: { status: nextReportStatus } });
-    await tx.statusLog.create({ data: { reportId: task.reportId, taskId: task.id, changedById: actor.id, fromStatus: task.status, toStatus: nextReportStatus, comment: typeof body.note === "string" ? body.note.trim() : null } });
-    return result;
-  });
-  return NextResponse.json({ data: updated });
+  try {
+    const updated = await prisma.$transaction(async (tx) => {
+      const taskClaim = await tx.maintenanceTask.updateMany({
+        where: { id, status: task.status, assignedStaffId: actor.id },
+        data: {
+          status: nextTaskStatus,
+          progressNote: typeof body.note === "string" ? body.note.trim() : task.progressNote,
+          completedNote: body.action === "complete" ? body.note.trim() : task.completedNote,
+          completedAt: body.action === "complete" ? new Date() : task.completedAt,
+        },
+      });
+      requireWorkflowClaim(taskClaim);
+      const reportClaim = await tx.maintenanceReport.updateMany({
+        where: { id: task.reportId, status: currentReportStatusForTask(task.status) },
+        data: { status: nextReportStatus },
+      });
+      requireWorkflowClaim(reportClaim);
+      await tx.statusLog.create({ data: { reportId: task.reportId, taskId: task.id, changedById: actor.id, fromStatus: task.status, toStatus: nextReportStatus, comment: typeof body.note === "string" ? body.note.trim() : null } });
+      return tx.maintenanceTask.findUniqueOrThrow({ where: { id } });
+    });
+    return NextResponse.json({ data: updated });
+  } catch (error) {
+    if (error instanceof WorkflowConflictError) return jsonError(error.message, 409);
+    throw error;
+  }
 }

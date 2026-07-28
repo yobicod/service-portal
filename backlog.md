@@ -60,6 +60,8 @@ Every status change must generate a `StatusLog` audit record.
 - A public “How it works” menu explains the request lifecycle with an automatically advancing, pulsing five-stage animation, selectable steps, role labels, and clear rejected/revision paths in Thai and English.
 - New-request location uses a required place description plus an OpenStreetMap preview and optional browser-geolocation coordinates, stored on the maintenance report. Every request-detail page shows a map: an OpenStreetMap pinpoint for saved coordinates or a place-description map search for older requests without coordinates.
 - Shared workflow-rule module used by report review, assignment, staff updates, and verification APIs; Node-based tests cover valid and invalid status transitions.
+- A full Chromium interaction audit now covers public, requester, admin, and staff flows at desktop, tablet, and mobile widths. Confirmed fixes include safe credential errors/callback continuation, truthful dashboard controls, responsive navigation and report cards, attachment selection/removal, accessible workflow confirmations, explicit load/error/retry states, map coordinate/fallback handling, and rapid-click protection.
+- Workflow mutation routes atomically claim the expected task/report status before writing tasks or status logs. Concurrent repeated review, assignment, staff-transition, and verification requests receive a controlled conflict instead of creating duplicate records.
 - Checks last passed: `npx prisma validate`, `npm run lint`, `npm test`, and `npm run build`. The test pre-step generates Prisma Client so clean CI checkouts can run tests without committed generated code; CI also supplies non-secret build-only service configuration because Next.js evaluates API modules during the production build.
 
 ## Local development
@@ -80,12 +82,13 @@ npm run dev
 
 ## Current technical constraints
 
-- The independent quality audit is tracked in `improve.md`. Its IMP-01 backend fix is implemented and awaiting independent verification: a stale Next.js dev Prisma client from before the coordinate migration rejected `latitude` even when null. Restart the development server after Prisma schema/client regeneration; the backend now omits unset optional coordinates and returns structured JSON errors. P1 work also covers callback continuation, error states, mobile navigation/session controls, language persistence, and dialog accessibility. Treat `improve.md` as the authoritative implementation tracker until the audit is closed.
+- The independent interaction audit is tracked in `improve.md`. Its P0/P1 interaction work and the dashboard/drill-down/attachment P2 items are implemented and independently verified in local Chromium. Browser artifacts are stored under `output/playwright/`. CI-runnable browser tests, other browser engines, and screen-reader coverage remain follow-up work.
+- Do not run `npm test` or another Prisma generation command while `next dev` is serving an active browser QA session. The generated-client rewrite can trigger invalid Fast Refresh chunks. For a clean local QA runtime, stop the server, regenerate first, then start it. Next.js 16.2.12 Turbopack also panicked on `/staff` during this audit; `next dev --webpack` was the stable local QA fallback.
 
 - Email/password authentication is implemented for the first release. It does not yet include registration, invitations, password reset, email verification, lockout/rate limiting, or future organization SSO/OIDC support.
 - Local MinIO is the chosen S3-compatible attachment provider. It runs through Docker Compose with a private bucket created by the application on first upload; production credentials must be replaced before deployment.
 - Attachments support JPG, PNG, WEBP, and PDF files up to 10MB. Report, task, and comment uploads plus downloads are session-authorized. JPG, PNG, and WEBP attachments render as secure inline thumbnails; PDFs remain filename links.
-- Email/in-app notifications, filtering, pagination, and endpoint/integration tests are not implemented.
+- Email/in-app notification delivery, advanced filtering, and endpoint/integration coverage are not implemented. Dashboard search and server pagination are implemented.
 - Prisma 7 uses `@prisma/adapter-pg` with `pg`; regenerate the client after schema edits.
 - `predev` and `prebuild` regenerate the Prisma client. After migrations or schema changes, restart the development server; a running process can retain the previous generated client and cause credential sign-in to fail.
 
@@ -94,8 +97,8 @@ npm run dev
 1. Add registration/invitation, password reset, email verification, lockout/rate limiting, and a migration path to organization SSO/OIDC.
 2. Add user-facing email/in-app notification delivery.
 3. Add endpoint/integration tests for session authorization and database transaction behavior.
-4. Add responsive UI QA, filters/search, pagination, and production deployment configuration.
-5. Add endpoint/integration tests for language-sensitive client messages and responsive UI behavior.
+4. Add CI browser regression coverage, cross-browser/screen-reader checks, and production deployment configuration.
+5. Add endpoint/integration tests for language-sensitive client messages, session authorization, and concurrent transaction behavior.
 
 ## Agent instructions
 

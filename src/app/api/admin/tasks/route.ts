@@ -3,6 +3,7 @@ import { Priority, ReportStatus, Role, TaskStatus } from "@/generated/prisma/cli
 import { getActor, isResponse, jsonError } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { canAssignReport } from "@/lib/workflow";
+import { requireWorkflowClaim, WorkflowConflictError } from "@/lib/workflow-mutation";
 
 export async function POST(request: NextRequest) {
   const actor = await getActor(request, [Role.ADMIN]);
@@ -19,11 +20,20 @@ export async function POST(request: NextRequest) {
   const estimatedCost = body.estimatedCost === undefined || body.estimatedCost === "" ? null : Number(body.estimatedCost);
   if (estimatedCost !== null && (!Number.isFinite(estimatedCost) || estimatedCost < 0)) return jsonError("estimatedCost must be a non-negative number.");
 
-  const task = await prisma.$transaction(async (tx) => {
-    const created = await tx.maintenanceTask.create({ data: { reportId: report.id, assignedStaffId: staff.id, assignedByAdminId: actor.id, instruction: typeof body.instruction === "string" ? body.instruction.trim() : null, dueDate, estimatedCost: estimatedCost === null ? null : String(estimatedCost), status: TaskStatus.ASSIGNED } });
-    await tx.maintenanceReport.update({ where: { id: report.id }, data: { status: ReportStatus.ASSIGNED, priority: body.priority ?? report.priority } });
-    await tx.statusLog.create({ data: { reportId: report.id, taskId: created.id, changedById: actor.id, fromStatus: report.status, toStatus: ReportStatus.ASSIGNED, comment: "Task assigned to staff." } });
-    return created;
-  });
-  return NextResponse.json({ data: task }, { status: 201 });
+  try {
+    const task = await prisma.$transaction(async (tx) => {
+      const claim = await tx.maintenanceReport.updateMany({
+        where: { id: report.id, status: report.status },
+        data: { status: ReportStatus.ASSIGNED, priority: body.priority ?? report.priority },
+      });
+      requireWorkflowClaim(claim);
+      const created = await tx.maintenanceTask.create({ data: { reportId: report.id, assignedStaffId: staff.id, assignedByAdminId: actor.id, instruction: typeof body.instruction === "string" ? body.instruction.trim() : null, dueDate, estimatedCost: estimatedCost === null ? null : String(estimatedCost), status: TaskStatus.ASSIGNED } });
+      await tx.statusLog.create({ data: { reportId: report.id, taskId: created.id, changedById: actor.id, fromStatus: report.status, toStatus: ReportStatus.ASSIGNED, comment: "Task assigned to staff." } });
+      return created;
+    });
+    return NextResponse.json({ data: task }, { status: 201 });
+  } catch (error) {
+    if (error instanceof WorkflowConflictError) return jsonError(error.message, 409);
+    throw error;
+  }
 }
